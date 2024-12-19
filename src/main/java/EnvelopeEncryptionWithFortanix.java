@@ -33,6 +33,39 @@ public class EnvelopeEncryptionWithFortanix {
         String apiKey = argv[0];
         String basePath = argv[1];
 
+        var client = createAutenticatedApiClient(apiKey, basePath);
+
+        SecurityObjectsApi securityObjectsApi = new SecurityObjectsApi(client.apiClient());
+        EncryptionAndDecryptionApi encryptionAndDecryptionApi = new EncryptionAndDecryptionApi(client.apiClient());
+
+        // Create a KEK - normally this step is done by the user.
+        var kek = createKek(securityObjectsApi);
+
+
+        // Create DEK (which will be used to crypt plaintext kafka records)
+        var dek = createDek(securityObjectsApi, encryptionAndDecryptionApi, kek);
+
+        // use dek.secretKey() to encrypt the plainText -> cipherText
+        // blob = kek id + dek.encryptedDek + dek.encryptedDekIv + cipherText
+        // store blob in kafka (storage)
+
+        client.close();
+
+        // later...  retrieve blob from kafka (storage)
+        // unpack kek id, dek.encryptedDek, dek.encryptedDekIv, cipherText
+
+        var client2 = createAutenticatedApiClient(apiKey, basePath);
+
+        var secretKey = unwrapDek(new EncryptionAndDecryptionApi(client2.apiClient()), kek, dek.encryptedDek(), dek.encryptedDekIv());
+
+        System.out.println("Key material equal : " + Arrays.equals(secretKey.getEncoded(), dek.dek().getEncoded()));
+
+        // use secretKey to decrypt the cipherText -> plaintext...
+
+        client2.close();
+    }
+
+    private static CloseableClient createAutenticatedApiClient(String apiKey, String basePath) throws ApiException {
         ApiClient apiClient = new ApiClient();
         apiClient.setDebugging(true);
         apiClient.setBasicAuthString(apiKey);
@@ -47,25 +80,7 @@ public class EnvelopeEncryptionWithFortanix {
         ApiKeyAuth auth = (ApiKeyAuth) apiClient.getAuthentication("bearerToken");
         auth.setApiKey(response.getAccessToken());
         auth.setApiKeyPrefix("Bearer");
-
-        SecurityObjectsApi securityObjectsApi = new SecurityObjectsApi(apiClient);
-        EncryptionAndDecryptionApi encryptionAndDecryptionApi = new EncryptionAndDecryptionApi(apiClient);
-
-        var kek = createKek(securityObjectsApi);
-
-        // Create DEK
-        var dek = createDek(securityObjectsApi, encryptionAndDecryptionApi, kek);
-
-        // use dek.secretKey() to encrypt some data -> cipherText
-        // blob = kek id + dek.encryptedDek + dek.encryptedDekIv + cipherText
-        // store blob
-
-        // later...  retrieve blob
-        // unpack kek id, dek.encryptedDek, dek.encryptedDekIv, cipherText
-
-        var secretKey = unwrapDek(encryptionAndDecryptionApi, kek, dek.encryptedDek(), dek.encryptedDekIv());
-
-        System.out.println("Key material equal : " + Arrays.equals(secretKey.getEncoded(), dek.dek().getEncoded()));
+        return new CloseableClient(apiClient, authApi);
     }
 
     private static SecretKey unwrapDek(EncryptionAndDecryptionApi encryptionAndDecryptionApi, KeyObject kek, byte[] encryptedDek, byte[] encryptedDekIv) throws ApiException {
@@ -103,14 +118,21 @@ public class EnvelopeEncryptionWithFortanix {
 
     private static KeyObject createDekKey(SecurityObjectsApi securityObjectsApi) throws ApiException {
         // create transient key to be the DEK
-        KeyObject dekKey = createTransientExportabkeKeyObject(securityObjectsApi);
-
-        SobjectDescriptor soDescriptor = new SobjectDescriptor().transientKey(dekKey.getTransientKey());
-        // Need to export the transient key to get the live key material
-        return securityObjectsApi.getSecurityObjectValueEx(soDescriptor);
+        KeyObject dekKey = createTransientExportableKeyObject(securityObjectsApi);
+        try {
+            SobjectDescriptor soDescriptor = new SobjectDescriptor().transientKey(dekKey.getTransientKey());
+            // Need to export the transient key to get the live key material
+            KeyObject exported = securityObjectsApi.getSecurityObjectValueEx(soDescriptor);
+            return exported;
+        }
+        finally {
+            // no longer need the server to retain the transient key.
+            // is there a way to tell the server to forget it?
+            // https://support.fortanix.com/docs/deleting-a-security-object doesn't appear to support transient keys.
+        }
     }
 
-    private static KeyObject createTransientExportabkeKeyObject(SecurityObjectsApi securityObjectsApi1) throws ApiException {
+    private static KeyObject createTransientExportableKeyObject(SecurityObjectsApi securityObjectsApi1) throws ApiException {
         var dekKeyRequest = new SobjectRequest()
                 ._transient(true)
                 .name("myDEK")
