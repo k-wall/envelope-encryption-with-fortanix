@@ -120,6 +120,8 @@ public class EnvelopeEncryptionWithFortanix {
         // create transient key to be the DEK
         KeyObject dekKey = createTransientExportableKeyObject(securityObjectsApi);
         try {
+            // Q1: is there a way to avoid the need to export?  is it possible to create a  transient key and get the
+            // key material back in a single API op.
             SobjectDescriptor soDescriptor = new SobjectDescriptor().transientKey(dekKey.getTransientKey());
             // Need to export the transient key to get the live key material
             KeyObject exported = securityObjectsApi.getSecurityObjectValueEx(soDescriptor);
@@ -128,6 +130,9 @@ public class EnvelopeEncryptionWithFortanix {
         finally {
             // no longer need the server to retain the transient key.
             // is there a way to tell the server to forget it?
+            // Q2: the application's sessions will probably be long lived and we might create many DEKs during the course of
+            // one session.   I'm concerned that the transient keys will cause bloat on the server side.   Is there a way
+            // to tell DSM to expunge the transient key without ending the session?
             // https://support.fortanix.com/docs/deleting-a-security-object doesn't appear to support transient keys.
         }
     }
