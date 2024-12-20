@@ -57,6 +57,7 @@ public class EnvelopeEncryptionWithFortanix {
         var secretKey = unwrapDek(new EncryptionAndDecryptionApi(client2.apiClient()), kek, dek.encryptedDek(), dek.encryptedDekIv());
 
         System.out.println("Key material equal : " + Arrays.equals(secretKey.getEncoded(), dek.dek().getEncoded()));
+        // use secretKey to decrypt cipherText -> plaintext
     }
 
     private static CloseableClient createAutenticatedApiClient(String apiKey, String basePath) throws ApiException {
@@ -96,6 +97,7 @@ public class EnvelopeEncryptionWithFortanix {
         KeyObject exportedDekKey = createDekKey(securityObjectsApi);
 
         // wrap the DEK's key material using the KEK
+        // Faisal: I found you can't use wrapkey with a transient key.  https://support.fortanix.com/apidocs/wrap-a-security-object-with-another-security-object
         var dekKeyMaterial = exportedDekKey.getValue();
         EncryptRequest encryptRequest = new EncryptRequest();
         encryptRequest
@@ -113,10 +115,17 @@ public class EnvelopeEncryptionWithFortanix {
     private static KeyObject createDekKey(SecurityObjectsApi securityObjectsApi) throws ApiException {
         // create transient key to be the DEK
         KeyObject dekKey = createTransientExportabkeKeyObject(securityObjectsApi);
+        // Faisal: Is it possible to have the transient key's key material returned in the response?
+        // I'd prefer to avoid the export API if I can.
 
-        SobjectDescriptor soDescriptor = new SobjectDescriptor().transientKey(dekKey.getTransientKey());
         // Need to export the transient key to get the live key material
-        return securityObjectsApi.getSecurityObjectValueEx(soDescriptor);
+        SobjectDescriptor soDescriptor = new SobjectDescriptor().transientKey(dekKey.getTransientKey());
+        var exported = securityObjectsApi.getSecurityObjectValueEx(soDescriptor);
+        // Faisal: once the I've exported the key material, I don't need the transient key to remain in the server's session.
+        // I don't think https://support.fortanix.com/docs/deleting-a-security-object works for transient keys.   Is there some other
+        // way to get the server to forget the key.   The session used by the application might be long-lived.  I am concerned that 
+        // transient key resources might exhaust the server side.
+        return export;
     }
 
     private static KeyObject createTransientExportabkeKeyObject(SecurityObjectsApi securityObjectsApi1) throws ApiException {
